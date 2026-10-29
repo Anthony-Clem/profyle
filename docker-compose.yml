@@ -1,0 +1,71 @@
+# Local services for development and CI. Credentials here are local-only defaults.
+name: profyle
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_USER: profyle
+      POSTGRES_PASSWORD: profyle
+      POSTGRES_DB: profyle
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Also creates the profyle_test database used by integration tests.
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U profyle -d profyle"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # S3-compatible storage (stands in for Cloudflare R2). S3 API on :9000, console on :9001.
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    environment:
+      RUSTFS_ACCESS_KEY: profyle
+      RUSTFS_SECRET_KEY: profyle-secret
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9000"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: creates the bucket, makes only users/* publicly readable, and allows browser PUTs.
+  s3-init:
+    image: amazon/aws-cli:2.39.1
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: profyle
+      AWS_SECRET_ACCESS_KEY: profyle-secret
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://rustfs:9000
+      S3_BUCKET: profyle
+      APP_ORIGIN: http://localhost:3000
+    volumes:
+      - ./docker/s3-init.sh:/s3-init.sh:ro
+    entrypoint: ["sh", "/s3-init.sh"]
+    restart: "no"
+
+  # SMTP on :1025, inbox UI and API on :8025.
+  mailpit:
+    image: axllent/mailpit:v1.32.0
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  postgres-data:
+  rustfs-data:

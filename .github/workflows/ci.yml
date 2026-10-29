@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      # Version comes from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Local-service defaults; the same values developers use with docker compose.
+      - run: cp .env.example .env
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+      # Same docker-compose.yml as local development: Postgres, RustFS, Mailpit.
+      - run: pnpm services:up
+      - run: pnpm db:migrate
+
+      - name: Unit + integration tests
+        run: pnpm test
+
+      - run: pnpm build
+
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: E2E tests
+        run: pnpm test:e2e
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
